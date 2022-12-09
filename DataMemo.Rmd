@@ -1,0 +1,49 @@
+---
+title: "FInalProjectDataMemo"
+author: "Trevor Rizzi"
+date: "2022-10-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Final Project Data Memo
+### TagMyBook dataset
+
+### What is the TagMyBook dataset, and how do I intend to use it?
+
+The TagMyBook dataset is filled with different books and their attributes. This data was found on Kaggle, https://www.kaggle.com/datasets/athu1105/tagmybook, created by Atharva Inamdar and has a usability index of 10. 
+The attributes of interest are genre and synopsis. I want to be able to predict the genre of a book based on any input synopsis. There is also data that can be used to predict the rating of a book based upon attributes such as author, number of followers, and number of reviews. I will primarily be looking at string/text variables, and as such will need to use natural language processing. There are a few tools in R that can help with this
+such as: Tidytext, Stringr, and more. The synopsis may contain a few key words that are indicative of the genre. This is a classification approach as it concerns qualitative data. This will be a predictive model for both the genre prediction and the rating prediction if I choose to include that.
+
+### What does my Timeline look like?
+
+The following is a general guideline of steps for me to follow with this project.
+Things may change depending upon the work of course.
+
+Oct 2 - project memo due
+
+Oct 9 - Data Cleaning
+
+Oct 16 - Exploratory Data Analysis
+
+Oct 23 - Exploratory Data Analysis
+
+Oct 30 - Model Building
+
+Nov 6 - Model Building
+
+Nov 13 - Model Building
+
+Nov 20 - Model Results
+
+Nov 27 - Model Results + conclusion
+
+Dec 6 - final project due
+
+
+### Concerns
+Dealing with and categorizing text seems like a very challenging task, especially in R but I am super keen to tackle it!
+
