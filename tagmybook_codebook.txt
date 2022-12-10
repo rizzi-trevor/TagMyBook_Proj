@@ -1,0 +1,6 @@
+Name / Data Type / Measurement Unit / Description
+-----------------------------
+Index/ int / — / Index of the book
+Title/ chr / — / Title of a book
+Genre/ chr / — / Genre of a book 
+Summary/ chr / — / Summary of a book

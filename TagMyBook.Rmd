@@ -1,0 +1,589 @@
+---
+title: "TagMyBook"
+author: "Trevor Rizzi"
+date: "2022-11-4"
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+The TagMyBook dataset is filled with different books and their attributes. This data was found on Kaggle, <https://www.kaggle.com/code/deblina00/book-genre-prediction/data>, created by Deblina Ghosh and has a usability index of 10. This dataset is an expansion of the dataset I had chosen in my initial project data memo. It has many more entries than the original, which I hope will strengthen my models. The attributes of interest are genre and summary I want to be able to predict the genre of a book based on any input synopsis. I will primarily be looking at string/text variables, and as such will need to use natural language processing. There are a few tools in R that can help with this such as: Tidytext, Textrecipes, and more. The synopsis may contain a few key words that are indicative of the genre. This is a classification approach as it concerns qualitative data. This will be a predictive model for genre prediction.
+
+# Why I chose this data
+
+As humans, when picking books what do we do? Read the synopsis on the back. This gives us a general idea of the genre and happenings of the book and helps us determine if we want to read it or not. I believe that training a computer to predict the genres of a book is the first step towards mimicking what we do. It could also be useful for categorizing books with unspecified genres. Most of all, I am extrememly interested in text processing and found this to be a great introduction.
+
+```{r,warning=FALSE,message=FALSE}
+library(tidyverse)
+library(lubridate)
+library(tidymodels)
+library(patchwork)
+library(janitor)
+library(tidytext)
+library(parsnip)
+library(textrecipes)
+library(discrim) 
+library(themis)
+library(hardhat)
+library(stopwords) ## Removing stop words
+library(irlba)
+library(kknn)
+library(wordcloud)
+library(keras)
+library(tensorflow)
+
+# Deprecated data set, had much fewer entries
+#tagMyBook <- read.csv("/Users/trevorrizz/Documents/Pstat131-FinalProj/data.csv")
+
+tagMyBook <- read.csv("/Users/trevorrizz/Documents/TagMyBook_Proj/dataTWO.csv")
+
+tagMyBook <- tagMyBook %>%
+  clean_names() %>% 
+  mutate_at(vars(genre), as.factor)
+set.seed(9388)
+
+
+```
+
+-   Load packages
+-   Load data
+
+## Data Cleaning
+
+```{r}
+#head(tagMyBook)
+```
+
+We now have 4657 book entries and 4 columns. This data has no missing values and is already extremely clean, so we just need to get it into the format we want.
+
+```{r}
+length(unique(tagMyBook$genre)) ## WE have 10 different genres
+length(unique(tagMyBook$title))  # we have 4296 unique books
+
+table(tagMyBook$genre) ## Shows how many of each genre we have.
+str(tagMyBook)
+```
+
+We have 10 different genres, and 4296 unique books. It is clear that the data is very unbalanced, thriller is 24% of the data while sports, psychology, and travel combined constitute about 7% of the data. This is an indication that I might want to consider downsampling later on when completing the models.
+
+## Tokenization
+
+```{r}
+
+tagMyBook_EDA <- tagMyBook %>%
+  unnest_tokens(word, summary) %>%
+  filter(!grepl('[0-9]', word)) %>% ## gets rid of numbers
+  filter(!grepl("[a1~!@#$%^&*(){}_+:\"<>?,./;'[]-=]" , word))
+
+```
+
+Before we perform any analysis on the data, we must tokenize the summary column. This is a fundamental step to natural language processing. It separates each piece of text into tokens. In this case we will be tokenizing the summary into individual words, using space as a delimiter. I also chose to remove any tokens that are numbers since they seem irrelevant when considering a book's genre.
+
+```{r}
+
+#tagMyBook_EDA %>%
+  #count(word, sort = T) # checking word count before removing STOP WORDS
+
+tagMyBook_EDA %>%
+  count(word == "the")
+
+tagMyBook_EDA <- tagMyBook_EDA %>%
+  filter(!(word %in% stopwords(source = "snowball")))
+
+```
+
+## Stop Words
+
+Stop words are the most common words in a language. These are typically articles, prepositions, pronouns, conjunctions, etc. They do not add much information to the text so we are going to remove them. "The" is a great example of a stop word that is used 116615 times in the data but is not helpful at all in predicting a genre since it gives off no connotation. We went from 1,679,409 tokens to 920,979 after removing stop words.
+
+# Data Analysis
+
+```{r}
+ggplot(tagMyBook_EDA, aes(genre)) + geom_bar() + 
+  labs(
+    title = "Genre Matched with Word count",
+    x = "Genre",
+    y = "Count of Individual Words"
+)
+
+```
+
+This graph shows the total word count for each genre. It is no surprise that the minority genres have much lower word counts. This is a huge concern as the model is likely going to struggle with predicting those genres.
+
+```{r}
+tagMyBook_EDA %>% 
+  count(word, sort = TRUE) %>%
+  filter(n > 2000) %>% 
+  mutate(word = reorder(word, n)) %>% 
+    ggplot(aes(word, n)) + 
+    geom_col() +
+    coord_flip() +
+    labs(x = "Word \n", y = "\n Count ", title = "Frequent Words In Dataset") +
+    geom_text(aes(label = n), hjust = 1.2, colour = "white")
+```
+
+This bar graph shows the top 12 words in the synopses of all of the books in the dataset. It is interesting to note that words such as "one" may not seem like it would have significant information pertinent to a books genre, but it still carries an important connotation that could effect the genre. This leads me into the next part of data exploration, sentiment analysis.
+
+## Sentiment Analysis
+
+Sentiment analysis is a technique to determine whether data is positive or negative. This is a subconscious mechanism humans do when parsing through data to understand their meaning, so we should see if the connotation of words can give us some insight on the genres.
+
+```{r}
+positive <- get_sentiments("bing") %>%
+  filter(sentiment == "positive")
+
+## Just lists the count of all positive sentiment words
+#tagMyBook_EDA %>%
+ # semi_join(positive) %>% 
+ # count(word, sort = TRUE)
+
+
+## Can plot the change of sentiment among genres
+bing <- get_sentiments("bing")
+
+genresentiment <- tagMyBook_EDA %>%
+  inner_join(bing) %>%
+  count(genre, sentiment) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative)
+
+ggplot(genresentiment, aes( genre, sentiment)) +
+  geom_bar(stat = "identity", show.legend = FALSE)
+
+
+
+```
+
+This is a graph of the sentiment of the words in each genre. Clearly, it is overwhelmingly negative. This, however, makes quite a bit of sense with genres such as crime, horror, thriller, and even history. The genre titles themselves have negative connotations, so it is not unreasonable to expect most of their synopses to have negative sounding words as well.
+
+```{r}
+bing_sentiment_count <- tagMyBook_EDA %>%
+  inner_join(bing) %>%
+  count(word, sentiment, sort = TRUE)
+
+bing_sentiment_count %>%
+  filter(n > 500) %>%
+  mutate(n = ifelse(sentiment == "negative", -n, n)) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col() +
+  coord_flip() +
+  labs(y = "Contribution to sentiment")
+
+
+```
+
+This graph shows the top words in the data, and illustrates their sentiment. It has some good examples to understand what kind of words are labelled as negative and positive.
+
+```{r}
+
+## Lets look at the sentiment of entire synopsis now yeah?
+
+bingnegative <- get_sentiments("bing") %>%
+  filter(sentiment == "negative")
+
+bingpositive <- get_sentiments("bing") %>%
+  filter(sentiment == "positive")
+
+
+wordcounts <- tagMyBook_EDA %>%
+  group_by(title) %>%
+  summarize(words = n())
+
+negative_synopses<-tagMyBook_EDA %>%
+  semi_join(bingnegative) %>%
+  group_by(title) %>%
+  summarize(negativewords = n()) %>%
+  left_join(wordcounts, by = c("title")) %>%
+  mutate(ratio = negativewords/words) 
+
+positive_synopses<-tagMyBook_EDA %>%
+  semi_join(bingpositive) %>%
+  group_by(title) %>%
+  summarize(positivewords = n()) %>%
+  left_join(wordcounts, by = "title") %>%
+  mutate(ratio = positivewords/words)
+  
+
+positive_synopses %>%
+  filter(ratio > .20) %>%
+  ggplot(aes(ratio * 100, str_trunc(title, 15))) + labs(x = "Positivity Percentage", y = "Title", title = "Positive Books") + geom_col() +
+
+negative_synopses %>%
+  filter(ratio > .28) %>%
+  ggplot(aes(ratio * 100, str_trunc(title, 15))) + labs(x = "Negativity Percentage", y = "Title", title = "Negative Books") + geom_col()
+
+```
+
+This graph shows us the most negative and the most positive books.
+
+```{r}
+
+# a plot of the frequency of top words in each genre sounds
+
+tagMyBook_EDA %>%
+  count(word, genre) %>%
+  filter(n >= 10) %>%  ## SHOULD PROBABLY INCLUDE THIS EVERYWHERE !
+  bind_tf_idf(word, genre, n) %>% 
+  group_by(genre) %>% 
+  top_n(tf_idf,n = 5) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = reorder_within(word, tf_idf, genre), y = tf_idf, fill = genre)) + geom_col() + scale_x_reordered() + coord_flip() + facet_wrap(~genre, scales = "free") + theme(legend.position = "none") + xlab("Word")
+
+
+```
+
+This graph shows the most common words per each genre. It is interesting to note that there are a lot of proper nouns in some of these genres. I could create a list of exclusions with them, but I am convinced that the proper nouns do have significant meaning to a book's genre.
+
+```{r, fig.height = 15, fig.width = 15}
+sparse_df <- tagMyBook %>% 
+  select(genre, summary) %>% 
+  unnest_tokens("word", "summary") %>% 
+  count(genre, word) %>% 
+  anti_join(stop_words) %>% 
+  filter(n>=20) %>%
+  group_by(genre) %>%
+  top_n(n, n= 25) %>%
+  ungroup() %>%
+  cast_sparse(row = genre, column = word, value = n)
+
+pca_text <- prcomp_irlba(sparse_df, n=4, scale = TRUE)
+
+pca_text$center %>% 
+  tidy() %>% 
+  select(names) %>% 
+  cbind(pca_text$rotation) %>% 
+  ggplot(aes(x = PC1, y = PC2, label = names)) + geom_point() + geom_text()
+```
+
+In this we can see multiple defined clusters such as {"battle","return","king"} and {"murder", "found", "police"}
+
+# Data Splitting
+
+```{r}
+tagMyBook_split <- tagMyBook %>%
+  initial_split(prop = .80, strata = genre)
+
+tagMyBook_test <- testing(tagMyBook_split)
+
+tagMyBook_train <- training(tagMyBook_split)
+
+crossValidation <- vfold_cv(tagMyBook_train, v = 5, strata = genre, repeats = 5)
+
+```
+
+We are doing an 80/20 split on the data for training and testing respectively. We are also doing cross validation with 5 folds and 5 repeats stratified on the book's genre.
+
+# Model Building
+
+## Naive Bayes
+
+The Naive Bayes model is a machine learning model for classification. The model is built upon the Bayes theorem which was discussed in PSTAT 120. ![Bayes Theorem.](https://miro.medium.com/max/1020/1*tjcmj9cDQ-rHXAtxCu5bRQ.webp)
+
+This model has the abilitiy to handle a large number of features, which is handy for natural language processing since our tokenization drastically increased our word count.
+
+```{r}
+#############NAIVE BAYES
+nb_rec <- recipe(genre~summary, data = tagMyBook_train) %>%
+  step_tokenize(summary) %>%
+  step_tokenfilter(summary, max_tokens = 1e3) %>%
+  step_tfidf(summary)
+
+nb_wf <- workflow() %>%
+  add_recipe(nb_rec)
+
+nb_spec <- naive_Bayes() %>%
+  set_mode("classification") %>%
+  set_engine("naivebayes")
+
+nb_fit <- nb_wf %>%
+  add_model(nb_spec) %>%
+  fit(data = tagMyBook_train)
+
+nb_wf <- workflow() %>%
+  add_recipe(nb_rec) %>%
+  add_model(nb_spec)
+
+nb_rs <- fit_resamples(
+  nb_wf,
+  crossValidation,
+  control = control_resamples(save_pred = TRUE)
+)
+
+nb_rs_metrics <- collect_metrics(nb_rs)
+nb_rs_predictions <- collect_predictions(nb_rs)
+
+
+nb_best_acc <- nb_rs %>%
+  show_best("roc_auc")
+
+nb_best_acc
+
+best_nb <- select_best(nb_rs, metric = "roc_auc")
+
+nb_final <- finalize_workflow(nb_wf, best_nb)
+
+nb_final_fit <- fit(nb_final, data = tagMyBook_train)
+
+nb_best_fit <- nb_final_fit %>%
+  pull_workflow_fit()
+
+## Autoplot does not work for objects of naive_baiyes
+
+nb_rs_predictions %>%
+  group_by(id) %>%
+  roc_curve(truth = genre, estimate = c(.pred_crime, .pred_fantasy, .pred_history, .pred_horror, .pred_psychology, .pred_romance, .pred_science, .pred_sports, .pred_thriller, .pred_travel)) %>%
+  autoplot() +
+  labs(
+    color = NULL,
+    title = "ROC curve for Book Genre",
+    subtitle = "Each resample repeat is shown in a different color"
+  )
+#####################################
+
+```
+
+Clearly this model did not even fit the minority genres. This is definitely due to the lack of entries for those genres in the data set. It does seem, however that the other genres were fit fairly well. For the next models, I am going to use downsampling to try and alleviate the disparity caused by the minority data.
+
+## Lasso
+
+The lasso model is a regularized linear model that can be used for classification. It is a very common model for industry practice in natural language processing. The lasso regression learns how much of a penalty to put on some of the features so that we can select some features out of all possible tokens.
+
+```{r}
+lasso_rec <-
+  recipe(genre ~ summary,
+         data = tagMyBook_train) %>%
+  step_tokenize(summary) %>%
+  step_tokenfilter(summary, max_tokens = 1e3) %>%
+  step_tfidf(summary) %>%
+  step_downsample(genre)
+
+lasso_spec <- multinom_reg(penalty = tune(), mixture = 1) %>%
+  set_mode("classification") %>%
+  set_engine("glmnet")
+
+sparse_bp <- default_recipe_blueprint(composition = "dgCMatrix")
+
+lasso_wf <- workflow() %>%
+  add_recipe(lasso_rec, blueprint = sparse_bp) %>%
+  add_model(lasso_spec)
+
+param_grid <- grid_regular(penalty(range = c(-5, 0)), levels = 20)
+
+lasso_rs <- tune_grid(
+  lasso_wf,
+  crossValidation,
+  grid = param_grid,
+  control = control_resamples(save_pred = TRUE)
+)
+
+lasso_best_acc <- lasso_rs %>%
+  show_best("roc_auc")
+
+lasso_best_acc
+
+lasso_rs %>%
+  collect_predictions() %>%
+  filter(penalty == lasso_best_acc$penalty) %>%
+  conf_mat(genre, .pred_class) %>%
+  autoplot(type = "heatmap") +
+  scale_y_discrete(labels = function(x) str_wrap(x, 20)) +
+  scale_x_discrete(labels = function(x) str_wrap(x, 20))
+
+lasso_metrics <- collect_metrics(lasso_rs)
+lasso_predictions <- collect_predictions(lasso_rs)
+
+lasso_predictions %>%
+  group_by(id) %>%
+  roc_curve(truth = genre, estimate = c(.pred_crime, .pred_fantasy, .pred_history, .pred_horror, .pred_psychology, .pred_romance, .pred_science, .pred_sports, .pred_thriller, .pred_travel)) %>%
+  autoplot() +
+  labs(
+    color = NULL,
+    title = "ROC curve for Book Genre",
+    subtitle = "Each resample repeat is shown in a different color"
+  )
+
+```
+
+This model is much better than the last! It managed to fit the minority genres, though it is clearly still struggling with them.
+
+## Random Forest
+
+The random forest model is made up of multiple decision trees that subset the data.
+```{r}
+rf_rec <-
+  recipe(genre ~ summary,
+         data = tagMyBook_train) %>%
+  step_tokenize(summary) %>%
+  step_tokenfilter(summary, max_tokens = 1e3) %>%
+  step_tfidf(summary) %>%
+  step_downsample(genre)
+
+rf_spec <- rand_forest(mtry = tune(), trees = tune(), min_n = tune()) %>%
+  set_engine("ranger", importance = "impurity") %>%
+  set_mode("classification")
+
+rf_wf <- workflow() %>%
+  add_model(rf_spec) %>%
+  add_recipe(rf_rec)
+
+param_grid <- grid_regular(mtry(range = c(1, 1)),trees(range = c(3, 6)), min_n(range = c(3, 6)),  levels = 8)
+
+rf_rs <- tune_grid(
+  rf_wf, 
+  resamples = crossValidation, 
+  grid = param_grid,
+  metrics = metric_set(roc_auc),
+  control = control_resamples(save_pred = TRUE)
+)
+
+autoplot(rf_rs)
+
+rf_best_acc <- rf_rs %>%
+  show_best("roc_auc")
+
+rf_best_acc
+
+rf_metrics <- collect_metrics(rf_rs)
+rf_predictions <- collect_predictions(rf_rs)
+rf_predictions %>%
+  group_by(id) %>%
+  roc_curve(truth = genre, estimate = c(.pred_crime, .pred_fantasy, .pred_history, .pred_horror, .pred_psychology, .pred_romance, .pred_science, .pred_sports, .pred_thriller, .pred_travel)) %>%
+  autoplot() +
+  labs(
+    color = NULL,
+    title = "ROC curve for Book Genre",
+    subtitle = "Each resample repeat is shown in a different color"
+  )
+
+```
+
+The random forest model did not perform as well as the lasso model, but did beat the naive bayes model as it actually managed to predict the minority genres with atleast a little accuracy.
+
+## Boosted Trees
+The boosted trees model is a combination of decision trees and boosting methods.
+
+```{r}
+
+bt_rec <-
+  recipe(genre ~ summary,
+         data = tagMyBook_train) %>%
+  step_tokenize(summary) %>%
+  step_tokenfilter(summary, max_tokens = 1e3) %>%
+  step_tfidf(summary) %>%
+  step_downsample(genre)
+
+bt_spec <- boost_tree(mtry = tune(), learn_rate = tune(), min_n = tune()) %>%
+  set_engine("xgboost") %>%
+  set_mode("classification")
+
+bt_wf <- workflow() %>% 
+  add_model(bt_spec) %>% 
+  add_recipe(rf_rec)
+
+bt_params <- parameters(bt_spec) %>% 
+  update(mtry = mtry(range= c(2, 120)),
+         learn_rate = learn_rate(range = c(-5, 0.2))
+  )
+
+param_grid <- grid_regular(bt_params, levels = 2)
+
+
+bt_rs <- tune_grid(
+  bt_wf, 
+  resamples = crossValidation, 
+  grid = param_grid,
+  metrics = metric_set(roc_auc),
+  control = control_resamples(save_pred = TRUE)
+)
+
+bt_metrics <- collect_metrics(bt_rs)
+bt_predictions <- collect_predictions(bt_rs)
+bt_predictions %>%
+  group_by(id) %>%
+  roc_curve(truth = genre, estimate = c(.pred_crime, .pred_fantasy, .pred_history, .pred_horror, .pred_psychology, .pred_romance, .pred_science, .pred_sports, .pred_thriller, .pred_travel)) %>%
+  autoplot() +
+  labs(
+    color = NULL,
+    title = "ROC curve for Book Genre",
+    subtitle = "Each resample repeat is shown in a different color"
+  )
+
+autoplot(bt_rs)
+
+bt_best_acc <- bt_rs %>%
+  show_best("roc_auc")
+
+bt_best_acc
+
+```
+
+# Final Model
+
+The lasso model was definitely the best performer of the four. So, I will continue our examination with its results. I will now collect the best performing lasso of them all to finalize the model.
+
+```{r}
+best_model <- show_best(lasso_rs, metric = "roc_auc") 
+
+best_wf <- lasso_wf %>% 
+  finalize_workflow(select_best(lasso_rs, metric = "roc_auc"))
+
+best_rs <- fit(best_wf, tagMyBook_train)
+
+best_model_predictions <- predict(best_rs, new_data = tagMyBook_test) %>% 
+  bind_cols(tagMyBook_test %>% select(genre, title)) 
+
+best_model_predictions %>% 
+  mutate(compare = (.pred_class == genre)) %>%
+  count(compare, sort = TRUE)
+
+# The majority genres clearly had more prediction
+best_model_predictions %>%
+  count(.pred_class)
+
+
+```
+
+Of the 934 books in the testing set, It accurately predicted 401 and failed to predict 533. This is less than 43% which is no better than random guessing.
+
+# Testing some predictions
+
+## First lets test a the synopsis of a book in the data set
+
+```{r}
+
+testBook <- data.frame(index = 1, title = "Drowned Wednesday", genre = "fantasy",
+  summary = "Drowned Wednesday is the first Trustee among the Morrow Days who is on Arthur's side and wishes the Will to be fulfilled. She appears as a leviathan/whale and suffers from Gluttony. The book begins when Leaf is visiting Arthur and they are discussing the invitation that Drowned Wednesday sent him. Arthur had been admitted to hospital because of the damage done to his leg when he attempted to enter Tuesday's Treasure Tower. Suddenly, the hospital room becomes flooded with water as the two are transported to the Border Sea of the House. Leaf is snatched away by a large ship with green sails, known as the Flying Mantis, while Arthur remains in his bed. When the Medallion given him by the immortal called the Mariner apparently fails to summon help, Arthur is without hope. Eventually, a buoy marking the pirate Elishar Feverfew's treasure floats toward him. As soon as Arthur opens it, his hand is marked with a bloody red colour. Arthur now has the Red Hand, by which Feverfew marks whoever has found his treasure, so that he can identify them later. Not long after, a scavenging ship called the Moth rescues Arthur. On board, Arthur (going by the name of Arth) is introduced to Sunscorch, the First Mate, and to Captain Catapillow. Their journey brings them through the Line of Storms and into the Border Sea, where they are later pursued by Feverfew's ghostly ship, the Shiver. The damage inflicted on the Moth is serious; therefore Sunscorch commands an Upper House Sorcerer, Dr. Scamandros, to open a transfer portal to elsewhere in the Secondary Realms. Scamandros claims that Arthur is carrying something that interfered with his magic, and tells Sunscorch to throw him overboard. As a last resort, Arthur shows them the Mariner's Medallion, which stops Scamandros saying that they must get rid of Arthur. After going through the transfer portal (with Arthur's help), the ship is grounded on a beach. When Arthur")
+
+predict(best_rs, testBook)
+
+```
+
+We tested the synopsis of the book "Drowned Wednesday" which is fantasy. Our model returned that is was history, so in this case it did not work.
+
+## Now lets test a book that is not in the data set
+
+```{r}
+
+testBook <- data.frame(index = 1, title = "The Alchemist", genre = "fantasy",
+  summary = "The Alchemist is a classic novel in which a boy named Santiago embarks on a journey seeking treasure in the Egyptian pyramids after having a recurring dream about it and on the way meets mentors, falls in love, and most importantly, learns the true importance of who he is and how to improve himself and focus on what really matters in life.")
+
+predict(best_rs, testBook)
+
+```
+
+Awesome! It predicted the genre of "The Alchemist" perfectly! I wish I could say that this was due to model accuracy but I have doubts.
+
+# Conclusion
+
+After testing the four models (lasso, random forest, boosted trees, and naive bays) I found that the lasso model fit the best. In conclusion, however once fitted to the testing set I discovered that the model did not predict a book's genre with very good accuracy.
+
+To improve this project and achieve a successful model, there are a number of changes and additions I could make. I think first of all a larger, more balanced dataset would be hugely beneficial. As noted earlier, the data I worked with had extreme minorities and majorities which definitely hurt the model when it came to predictions. I noticed that the majority classes did have a much higher number of predictions than did the minority. The downsampling I did perform was supposed to remedy this, but may not have been enough. I also neglected to use the downsampling with the Naive Bays model as it was not working gave me linear roc_aucs. I also think that in the tokenization step, I could increase the max tokens. I only did 1e3 which is 1000 tokens because my computer was not able to handle the computation with a number any higher. I believe if I was able to fit the actual number of 50,000 tokens, the model would have trained much more accurately.
+
+In conclusion, I am not too satisfied with the results of the models but I am happy to have tried them. Natural language processing is a very difficult, yet interesting genre of machine learning and I would like to pursue it further in my studies.
