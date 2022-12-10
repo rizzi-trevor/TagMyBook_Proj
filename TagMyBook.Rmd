@@ -5,6 +5,8 @@ date: "2022-11-4"
 output:
   html_document:
     code_folding: hide
+    toc: TRUE
+    toc_float: TRUE
 ---
 
 ```{r setup, include=FALSE}
